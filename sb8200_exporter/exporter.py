@@ -12,10 +12,12 @@ def main():
     parser.add_argument("--port", type=int, default=9195)
     parser.add_argument("--bind_address", default="0.0.0.0")
     parser.add_argument("--address", default="192.168.100.1")
+    parser.add_argument("--username", default="admin")
+    parser.add_argument("--password")
 
     args = parser.parse_args()
 
-    collector = sb8200_exporter.Collector(args.address)
+    collector = sb8200_exporter.Collector(args.address, args.username, args.password)
 
     prometheus_client.REGISTRY.register(collector)
 

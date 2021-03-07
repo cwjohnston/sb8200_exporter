@@ -1,24 +1,39 @@
+import base64
 import re
 import urllib.parse
+import urllib3
 
 import bs4
 import requests
 import prometheus_client
 import prometheus_client.core
 
+urllib3.disable_warnings()
+
+HEADERS = {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Cache-Control': 'max-age=',
+    'Connection': 'keep-alive',
+    'DNT': '1',
+    'Upgrade-Insecure-Requests': '1',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:82.0) Gecko/20100101 Firefox/82.0',
+}
 
 class Collector(object):
 
     SCHEME = "http"
-    PATH = "/"
+    PATH = "/cmconnectionstatus.html"
 
     _DOWNSTREAM_HEADER_DISCRETE = set(("frequency",))
     _DOWNSTREAM_HEADER_COUNTER = set(("corrected", "uncorrectables"))
     _UPSTREAM_HEADER_DISCRETE = set(("frequency", "symbol_rate"))
     _UPSTREAM_HEADER_COUNTER = set(())
 
-    def __init__(self, address):
+    def __init__(self, address, username, password):
         self.address = address
+        self.username = username
+        self.password = password
         self._prefix = "sb8200_"
 
     def headerify(self, text):
@@ -75,12 +90,49 @@ class Collector(object):
                     False, prefix + "state", None, 1, **state))
         return metrics
 
+    def get_credential(self):
+        """ Get the cookie credential by sending the
+        username and password pair for basic auth. They
+        also want the pair as a base64 encoded get req param
+        """
+        token = self.username + ":" + self.password
+        auth_hash = base64.b64encode(token.encode('ascii'))
+        u = urllib.parse.urlunparse((
+            self.SCHEME, self.address, self.PATH, None, auth_hash.decode(), None))
+
+        try:
+            resp = requests.get(u, headers=HEADERS, auth=(self.username, self.password), verify=False)
+            if resp.status_code != 200:
+                print('Error authenticating with %s', u)
+                print('Status code: %s', resp.status_code)
+                print('Reason: %s', resp.reason)
+                return None
+
+            credential = resp.text
+            resp.close()
+        except Exception as exception:
+           print('Error authenticating with %s', u)
+           return None
+
+        if 'Password:' in credential:
+            print(
+                'Authentication error, received login page.  Check username / password.')
+            return None
+
+        return credential
+
     def collect(self):
         metrics = []
 
+        if self.password:
+            credential = self.get_credential()
+            cookies = {'credential': credential}
+        else:
+            cookies = None
+
         u = urllib.parse.urlunparse((
             self.SCHEME, self.address, self.PATH, None, None, None))
-        r = requests.get(u)
+        r = requests.get(u, cookies=cookies, headers=HEADERS, verify=False)
         r.raise_for_status()
 
         h = bs4.BeautifulSoup(r.text, "html5lib")
